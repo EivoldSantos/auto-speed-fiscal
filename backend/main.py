@@ -4,7 +4,7 @@ SPED Autocorretor — Backend FastAPI
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
-import sqlite3, json, io, hashlib
+import sqlite3, json, io, hashlib, re
 from datetime import datetime
 from pathlib import Path
 from engine import processar as processar_icms
@@ -474,6 +474,52 @@ def editar_cod_rec_st(proc_id: int, req: EditarCodRecE250Request):
     return {"ok": True, "alterados": alterados, "cod_rec": req.cod_rec, "uf_st": uf_alvo}
 
 
+class EditarCampoRequest(BaseModel):
+    linha: int
+    campo_idx: int
+    novo_valor: str
+
+@app.post("/editar/campo/{proc_id}")
+def editar_campo(proc_id: int, req: EditarCampoRequest):
+    """Edita um campo específico de uma linha (1-based não-vazia)."""
+    lines = _ler_fixed(proc_id)
+    nao_vazias = [(i, l) for i, l in enumerate(lines) if l.strip()]
+    if req.linha < 1 or req.linha > len(nao_vazias):
+        raise HTTPException(400, f"Linha {req.linha} fora do intervalo")
+    idx_real, linha_str = nao_vazias[req.linha - 1]
+    p = linha_str.split("|")
+    if req.campo_idx < 0 or req.campo_idx >= len(p):
+        raise HTTPException(400, f"Campo {req.campo_idx} fora do intervalo (máx {len(p)-1})")
+    antigo = p[req.campo_idx]
+    p[req.campo_idx] = req.novo_valor
+    lines[idx_real] = "|".join(p)
+    _salvar_fixed(proc_id, lines)
+    return {"ok": True, "antigo": antigo, "novo": req.novo_valor, "linha": req.linha}
+
+
+class EditarCodPartRequest(BaseModel):
+    linha: int
+    cod_part: str
+
+@app.post("/editar/cod_part/{proc_id}")
+def editar_cod_part(proc_id: int, req: EditarCodPartRequest):
+    """Troca o COD_PART de um C100 específico (corrige CNPJ divergente da chave)."""
+    lines = _ler_fixed(proc_id)
+    nao_vazias = [(i, l) for i, l in enumerate(lines) if l.strip()]
+    if req.linha < 1 or req.linha > len(nao_vazias):
+        raise HTTPException(400, f"Linha {req.linha} fora do intervalo")
+    idx_real, linha_str = nao_vazias[req.linha - 1]
+    p = linha_str.split("|")
+    if len(p) < 2 or p[1].strip() != "C100":
+        raise HTTPException(400, f"Linha {req.linha} não é um registro C100")
+    antigo = p[4].strip() if len(p) > 4 else ""
+    while len(p) <= 4: p.append("")
+    p[4] = req.cod_part
+    lines[idx_real] = "|".join(p)
+    _salvar_fixed(proc_id, lines)
+    return {"ok": True, "antigo": antigo, "novo": req.cod_part, "linha": req.linha}
+
+
 @app.get("/pendencias/{proc_id}")
 def listar_pendencias(proc_id: int):
     """Retorna pendências manuais (ICMS/IPI ou Contribuições)."""
@@ -487,17 +533,28 @@ def listar_pendencias(proc_id: int):
 
 
 def _pendencias_contrib(proc_id: int) -> dict:
-    """Pendências específicas de Contribuições: C100 sem CHV_NFE, CST PIS/COFINS inválido."""
+    """Pendências específicas de Contribuições."""
     lines = _ler_fixed(proc_id)
     nao_vazias = [l for l in lines if l.strip()]
     pendencias = []
 
     uf_arq = ""
+    cnpj0000 = ""
+    participantes: dict[str, str] = {}  # cod_part → cnpj
+
     for l in nao_vazias:
-        if l.startswith("|0000|"):
-            p0 = l.split("|")
-            uf_arq = p0[10].strip() if len(p0) > 10 else ""
-            break
+        p = l.split("|")
+        if len(p) < 2: continue
+        reg = p[1].strip()
+        if reg == "0000":
+            uf_arq = p[10].strip() if len(p) > 10 else ""
+            cnpj0000 = p[9].strip() if len(p) > 9 else ""
+        elif reg == "0150" and len(p) > 5:
+            cod_part = p[2].strip()
+            cnpj_part = p[5].strip() if len(p) > 5 else ""
+            cpf_part = p[6].strip() if len(p) > 6 else ""
+            if cod_part:
+                participantes[cod_part] = cnpj_part or cpf_part
 
     for linha_1based, l in enumerate(nao_vazias, 1):
         p = l.split("|")
@@ -507,10 +564,12 @@ def _pendencias_contrib(proc_id: int) -> dict:
         if reg == "C100":
             cod_mod = p[5].strip() if len(p) > 5 else ""
             cod_sit = p[6].strip() if len(p) > 6 else ""
-            chv = p[9].strip() if len(p) > 9 else ""
+            chv = re.sub(r"\D", "", p[9]) if len(p) > 9 else ""
+            num_doc = p[8].strip() if len(p) > 8 else "?"
+            dt_doc = p[10].strip() if len(p) > 10 else ""
+            cod_part = p[4].strip() if len(p) > 4 else ""
+
             if cod_mod in ("55", "65") and cod_sit not in {"05"} and not chv:
-                num_doc = p[8].strip() if len(p) > 8 else "?"
-                dt_doc = p[10].strip() if len(p) > 10 else ""
                 pendencias.append({
                     "tipo": "chv_nfe",
                     "reg": "C100",
@@ -520,6 +579,61 @@ def _pendencias_contrib(proc_id: int) -> dict:
                     "cod_mod": cod_mod,
                     "raw": l[:120],
                     "descricao": f"NF-e/NFC-e nº {num_doc} sem chave de acesso"
+                })
+
+            if chv and len(chv) == 44 and cod_part:
+                cnpj_chv = chv[6:20]
+                ind_emit = p[3].strip() if len(p) > 3 else ""
+                cnpj_part = participantes.get(cod_part, "")
+                divergente = False
+                if ind_emit == "1" and cnpj_part and cnpj_chv != cnpj_part:
+                    divergente = True
+                elif ind_emit == "0" and cnpj0000 and cnpj_chv != cnpj0000:
+                    divergente = True
+                if divergente:
+                    part_correto = ""
+                    for cp, cn in participantes.items():
+                        if cn == cnpj_chv:
+                            part_correto = cp
+                            break
+                    cnpj_esperado = cnpj_part if ind_emit == "1" else cnpj0000
+                    pendencias.append({
+                        "tipo": "cnpj_chv_divergente",
+                        "reg": "C100",
+                        "linha": linha_1based,
+                        "num_doc": num_doc,
+                        "dt_doc": dt_doc,
+                        "cod_mod": cod_mod,
+                        "raw": l[:120],
+                        "descricao": f"CNPJ da chave ({cnpj_chv}) ≠ {'participante' if ind_emit == '1' else 'emitente'} ({cnpj_esperado})",
+                        "cnpj_chave": cnpj_chv,
+                        "cnpj_participante": cnpj_esperado,
+                        "cod_part_atual": cod_part,
+                        "cod_part_correto": part_correto,
+                    })
+
+        if reg == "C170" and len(p) > 32:
+            cst_pis = p[25].strip() if len(p) > 25 else ""
+            cst_cofins = p[31].strip() if len(p) > 31 else ""
+            bc_pis_s = p[26].strip() if len(p) > 26 else ""
+            bc_cof_s = p[32].strip() if len(p) > 32 else ""
+            bc_pis = float(bc_pis_s.replace(",", ".")) if bc_pis_s else 0.0
+            bc_cof = float(bc_cof_s.replace(",", ".")) if bc_cof_s else 0.0
+            if bc_pis_s and bc_cof_s and abs(bc_pis - bc_cof) > 0.02:
+                cod_item = p[3].strip() if len(p) > 3 else ""
+                cfop = p[11].strip() if len(p) > 11 else ""
+                pendencias.append({
+                    "tipo": "bc_assimetria",
+                    "reg": "C170",
+                    "linha": linha_1based,
+                    "raw": l[:120],
+                    "descricao": f"BC PIS ({bc_pis_s}) ≠ BC COFINS ({bc_cof_s})",
+                    "cod_item": cod_item,
+                    "cfop": cfop,
+                    "bc_pis": bc_pis_s,
+                    "bc_cofins": bc_cof_s,
+                    "cst_pis": cst_pis,
+                    "cst_cofins": cst_cofins,
                 })
 
         if reg == "M205" and len(p) > 3:
