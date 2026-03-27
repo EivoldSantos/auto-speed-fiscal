@@ -36,6 +36,14 @@ CST_ISENTO_ZERO_SUSP = {"04","06","07","08","09"}
 
 BLOCOS_CONTRIB_ORDERED = ["0","A","C","D","F","I","M","P","1","9"]
 
+IE_TAMANHO_POR_UF = {
+    "AC": 13, "AL": 9,  "AP": 9,  "AM": 9,  "BA": 9,  "CE": 9,
+    "DF": 13, "ES": 9,  "GO": 9,  "MA": 9,  "MT": 11, "MS": 9,
+    "MG": 13, "PA": 9,  "PB": 9,  "PR": 10, "PE": 9,  "PI": 9,
+    "RJ": 8,  "RN": 10, "RS": 10, "RO": 14, "RR": 9,  "SC": 9,
+    "SP": 12, "SE": 9,  "TO": 11,
+}
+
 
 # ── Helpers ───────────────────────────────────────────────────────
 def to_num(s: str) -> Optional[float]:
@@ -570,6 +578,17 @@ def processar(conteudo: str) -> Resultado:
 
         elif reg == "0150":
             fix_len(i, f, 3, 100, reg, ln, "NOME")
+            # H1: IE padding — zeros à esquerda conforme tamanho da UF
+            ie = f[7].strip() if len(f) > 7 else ""
+            cod_mun = f[8].strip() if len(f) > 8 else ""
+            if ie and cod_mun and len(cod_mun) >= 2:
+                uf_part = UF_COD.get(cod_mun[:2], "")
+                tam_esperado = IE_TAMANHO_POR_UF.get(uf_part, 0)
+                if tam_esperado > 0 and len(ie) < tam_esperado:
+                    ie_nova = ie.zfill(tam_esperado)
+                    rec_fix(i, 7, ie, ie_nova, reg, ln,
+                            f"IE com padding: {ie}→{ie_nova} ({uf_part}, {tam_esperado} dígitos)")
+                    f[7] = ie_nova
 
         elif reg == "C100":
             for fi, nm in [(10, "DT_DOC"), (11, "DT_E_S")]:
@@ -654,11 +673,12 @@ def processar(conteudo: str) -> Resultado:
                         f"CFOP saída ({cfop}) com CST PIS de entrada ({cst_pis})",
                         "Saídas exigem CST 01-49 ou 99")
 
+            # H2: Simetria CST PIS / CST COFINS
             if cst_pis and cst_cofins and cst_pis != cst_cofins:
-                if not (cst_pis in {"98","99"} or cst_cofins in {"98","99"}):
-                    rec_flag(reg, ln,
-                        f"CST PIS ({cst_pis}) ≠ CST COFINS ({cst_cofins})",
-                        "PVA exige simetria entre CST PIS e CST COFINS")
+                rec_fix(i, 31, cst_cofins, cst_pis, reg, ln,
+                    f"CST COFINS ({cst_cofins})→({cst_pis}) para simetria com CST PIS")
+                f[31] = cst_pis
+                cst_cofins = cst_pis
             bc_pis_v = to_num(f[26]) if len(f) > 26 else None
             bc_cof_v = to_num(f[32]) if len(f) > 32 else None
             if bc_pis_v is not None and bc_cof_v is not None and bc_pis_v > 0 and bc_cof_v > 0:
