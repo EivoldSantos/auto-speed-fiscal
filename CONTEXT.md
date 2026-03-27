@@ -1,24 +1,33 @@
 # SPED Autocorretor — Contexto Completo do Projeto
 
-> Arquivo de referência para o Cursor. Gerado a partir da sessão de desenvolvimento completa.  
+> Arquivo de referência para o Cursor. Gerado a partir das sessões de desenvolvimento.  
 > Última atualização: março/2026
 
 ---
 
 ## 1. Visão Geral
 
-Aplicação full-stack para **validação e correção automática de arquivos SPED EFD ICMS/IPI** (Sistema Público de Escrituração Digital), eliminando ou reduzindo ao mínimo os erros de importação no **PVA SERPRO** (validador oficial da Receita Federal).
+Aplicação full-stack para **validação e correção automática de arquivos SPED**, suportando duas escriturações:
+
+- **EFD ICMS/IPI** — Escrituração Fiscal Digital de ICMS e IPI
+- **EFD-Contribuições** — Escrituração Fiscal Digital de PIS/COFINS
+
+O sistema elimina ou reduz ao mínimo os erros de importação no **PVA SERPRO** (validador oficial da Receita Federal).
 
 ### Contexto de negócio
 - Contadores e empresas geram arquivos SPED via ERP que chegam com erros estruturais e fiscais
 - O PVA valida e rejeita com mensagens genéricas difíceis de interpretar
 - A ferramenta processa o arquivo, corrige o que é automatizável e expõe o restante para intervenção manual assistida
+- O tipo de SPED (ICMS/IPI ou Contribuições) é detectado automaticamente pelo registro 0000
 
 ### Clientes testados
-| Empresa | UF | Período | Resultado |
-|---|---|---|---|
-| COSTA RIBEIRO SOLUCOES EM EPIS LTDA | MG | fev/2026 | 0 erros após correção |
-| MB PLASTIC INDUSTRIA E COMERCIO LTDA | SP | jan/2026 | 0 erros após correção |
+
+| Empresa | UF | Escrituração | Período | Resultado |
+|---|---|---|---|---|
+| COSTA RIBEIRO SOLUCOES EM EPIS LTDA | MG | ICMS/IPI | fev/2026 | 0 erros após correção |
+| MB PLASTIC INDUSTRIA E COMERCIO LTDA | SP | ICMS/IPI | jan/2026 | 0 erros após correção |
+| CARVALHO E LAURENTI COMERCIO LTDA | — | Contribuições | nov/2025 | 0 erros (arquivo limpo) |
+| COSTA RIBEIRO SOLUCOES EM EPIS LTDA | MG | Contribuições | dez/2025 | 730→3 erros (3 manuais) |
 
 ---
 
@@ -27,7 +36,8 @@ Aplicação full-stack para **validação e correção automática de arquivos S
 | Camada | Tecnologia | Versão |
 |---|---|---|
 | Backend | Python + FastAPI | 3.10+ / 0.115.0 |
-| Engine de validação | Python puro | — |
+| Engine ICMS/IPI | Python puro | — |
+| Engine Contribuições | Python puro | — |
 | Banco de dados | SQLite | embutido |
 | Frontend | Next.js + React | 14.2.5 / 18 |
 | Estilização | Tailwind CSS | 3.4.1 |
@@ -46,56 +56,54 @@ Scripts de inicialização: `iniciar.bat` (Windows) e `iniciar.sh` (Linux/Mac).
 ```
 sped-app/
 ├── backend/
-│   ├── main.py              # FastAPI — 10 endpoints REST
-│   ├── engine.py            # Engine de validação/correção (685 linhas)
-│   ├── dados_pva.json       # Leiaute + tabelas do PVA (448 KB)
-│   ├── requirements.txt     # fastapi, uvicorn, python-multipart
-│   ├── sped.db              # SQLite (gerado em runtime)
-│   └── arquivos/            # SPEDs corrigidos por ID (gerado em runtime)
+│   ├── main.py                  # FastAPI — endpoints REST (dual engine)
+│   ├── engine.py                # Engine ICMS/IPI (~685 linhas)
+│   ├── engine_contrib.py        # Engine Contribuições (~1080 linhas)
+│   ├── dados_pva.json           # Leiaute + tabelas PVA ICMS/IPI (448 KB)
+│   ├── dados_pva_contrib.json   # Leiaute + tabelas PVA Contribuições
+│   ├── converter_pva_contrib.py # Script para gerar dados_pva_contrib.json
+│   ├── requirements.txt         # fastapi, uvicorn, python-multipart
+│   ├── sped.db                  # SQLite (gerado em runtime)
+│   └── arquivos/                # SPEDs corrigidos por ID (gerado em runtime)
 │
 ├── frontend/
 │   ├── app/
-│   │   ├── page.tsx         # Página principal — upload + tabs
-│   │   ├── layout.tsx       # Layout raiz Next.js
-│   │   └── globals.css      # Tailwind + fontes IBM Plex
+│   │   ├── page.tsx             # Página principal — upload + tabs (dual type)
+│   │   ├── layout.tsx           # Layout raiz Next.js
+│   │   └── globals.css          # Tailwind + fontes IBM Plex
 │   ├── components/
-│   │   ├── Dashboard.tsx    # Gráfico de alíquotas efetivas por CFOP
-│   │   ├── Historico.tsx    # Lista de processamentos anteriores
-│   │   ├── Comparativo.tsx  # Gráficos de série temporal por CNPJ
-│   │   └── PendenciasManual.tsx  # CHV_NFE + COD_REC + E116
-│   ├── next.config.js       # Proxy /api/* → localhost:8000
+│   │   ├── Dashboard.tsx        # Dashboard ICMS (alíquotas) ou Contribuições (PIS/COFINS)
+│   │   ├── Historico.tsx        # Lista de processamentos anteriores
+│   │   ├── Comparativo.tsx      # Gráficos de série temporal por CNPJ
+│   │   └── PendenciasManual.tsx # CHV_NFE + COD_REC + E116 + M205/M605
+│   ├── next.config.js           # Proxy /api/* → localhost:8000
 │   ├── tailwind.config.js
 │   └── tsconfig.json
 │
 ├── iniciar.bat
 ├── iniciar.sh
+├── CONTEXT.md
 └── README.md
 ```
 
 ---
 
-## 4. Dados de Referência (dados_pva.json)
+## 4. Detecção Automática do Tipo de SPED
 
-Gerado a partir do `descritor_v20.xml` oficial do PVA SERPRO. Contém:
-
-| Chave | Conteúdo |
-|---|---|
-| `leiaute` | 267 registros com campos, tamanhos máximos e índices |
-| `cfop` | 620 CFOPs válidos |
-| `cfop_sai_to_ent` / `cfop_ent_to_sai` | Conversão entrada↔saída |
-| `cst_icms` | CSTs ICMS válidos |
-| `cst_ipi` | CSTs IPI válidos |
-| `cst_pis` | CSTs PIS válidos |
-| `mod_doc` | Modelos de documento (55=NF-e, 65=NFC-e, etc.) |
-| `cod_sit` | Códigos de situação (00-09) |
-| `versoes` | Versões do leiaute por período |
-| `uf_cod` | Mapeamento COD_MUN IBGE → UF |
-| `f2.aj` | Códigos de ajuste E111 por UF (vigência histórica) |
-| `f2.rec` | Códigos de receita E116 por UF (vigência histórica) |
+```python
+def detectar_tipo_sped(conteudo: str) -> str:
+    # ICMS/IPI: 0000 tem 15 campos (inclui COD_FIN, IE, IM, IND_PERFIL)
+    # Contribuições: 0000 tem 14 campos (inclui TIPO_ESCRIT, IND_NAT_PJ, IND_ATIV)
+    for line in conteudo.split("\n"):
+        if line.startswith("|0000|"):
+            n_campos = len(line.split("|")) - 2
+            return "contrib" if n_campos <= 14 else "icms"
+    return "icms"
+```
 
 ---
 
-## 5. Engine de Validação (`engine.py`)
+## 5. Engine ICMS/IPI (`engine.py`)
 
 ### Fluxo principal
 
@@ -109,19 +117,7 @@ def processar(conteudo: str) -> Resultado:
     # Sumário e aliq_map
 ```
 
-### Resultado retornado
-
-```python
-@dataclass
-class Resultado:
-    erros: list[Erro]       # Erros críticos que impedem importação
-    flags: list[Flag]       # Alertas que requerem revisão manual
-    fixes: list[Fix]        # Correções aplicadas automaticamente
-    sumario: Sumario        # Métricas + aliq_map por CFOP
-    fixed_lines: list[str]  # Linhas do arquivo após correções
-```
-
-### Correções automáticas implementadas
+### Correções automáticas
 
 | Registro | Campo | Correção |
 |---|---|---|
@@ -132,117 +128,27 @@ class Resultado:
 | `C100` | `CHV_NFE` | Detecta ausência em MOD=55/65 e reporta como erro |
 | `C170` | `VL_ICMS`, `VL_ICMS_ST` | Recalcula BC × alíquota |
 | `C190` | Geração automática | Via C170 filhos ou CST=300/CFOP=5102 para NFC-e |
-| `E110` | `VL_ICMS_RECOLHER`, `VL_SLD_CREDOR_TRANSPORTAR` | Fórmula correta: `tot_cred - tot_deb` |
-| `E116` | `MES_REF` | Sempre `mmaaaa` do `DT_INI` do `0000` |
-| `E116` | `COD_REC` | Auto-detecção por UF + tipo empresa (ver seção 6) |
-| `H005` | `DT_INV` | Normaliza formato de data |
+| `E110` | `VL_ICMS_RECOLHER` | Fórmula: `tot_cred - tot_deb` |
+| `E116` | `COD_REC` | Auto-detecção por UF + tipo empresa |
+| `E250` | Geração automática | Quando E210 tem ICMS-ST a recolher |
 | `H010` | `VL_ITEM` | Recalcula `QTD × VL_UNIT` |
 | `H010` | `IND_PROP` | Corrige valores inválidos para `0` |
-| `K200` | `DT_EST` | Fallback para `DT_FIN` do `0000` quando ERP coloca lixo |
-| `K200` | `IND_EST` | Valida `0` ou `1` |
-| `E250` | Geração automática | Quando E210.VL_ICMS_RECOL_ST+DEB_ESP_ST > 0 e sem E250 filho |
+| `K200` | `DT_EST` | Fallback para `DT_FIN` do `0000` |
 | Todos xXX990 | `QTD_LIN_X` | Recalcula após qualquer modificação |
 | `9900` | `QTD_REG_BLC` | Recalcula contadores por tipo de registro |
 | `9999` | `QTD_LIN` | Recalcula total de linhas não-vazias |
 
-### Fórmula E110 (crítica — estava errada nas versões anteriores)
+### Fórmula E110
 
 ```python
-# Campos conforme leiaute oficial:
-# f[2]=VL_TOT_DEBITOS  f[4]=VL_TOT_AJ_DEBITOS  f[5]=VL_ESTORNOS_CRED
-# f[6]=VL_TOT_CREDITOS f[8]=VL_TOT_AJ_CREDITOS  f[9]=VL_ESTORNOS_DEB
-# f[10]=VL_SLD_CREDOR_ANT  f[13]=VL_ICMS_RECOLHER  f[14]=VL_SLD_CREDOR_TRANSPORTAR
-
 tot_cred = f[6] + f[8] + f[9] + f[10]
 tot_deb  = f[2] + f[4] + f[5]
 saldo    = tot_cred - tot_deb
-
 f[13] = max(0, -saldo)   # VL_ICMS_RECOLHER
 f[14] = max(0,  saldo)   # VL_SLD_CREDOR_TRANSPORTAR
 ```
 
-> **Bug histórico**: versões anteriores usavam `f[4]-f[8]-f[10]` (campos errados), zerando saldo credor legítimo (ex: R$ 3.801,22 virava R$ 0,00).
-
-### Geração automática de C190
-
-```python
-# Para cada C100 sem C190:
-# 1. COD_SIT in {02,03,04,05,06,07,08} → dispensar
-# 2. Tem C170 filhos → consolidar por CST+CFOP+ALIQ → gerar C190
-# 3. MOD=65 (NFC-e) e IND_OPER=1 (saída) → gerar: CST=300/CFOP=5102/VL_OPR=VL_DOC
-# 4. Outros sem C170 → rec_err para revisão manual
-
-PAI_FILHO = {
-    "C100": ["C190"], "C400": ["C405"], "C500": ["C590"],
-    "C600": ["C690"], "C800": ["C860"], "D100": ["D190"],
-    "D500": ["D590"], "E100": ["E110"], "E500": ["E520"],
-    "H001": ["H005"],
-}
-DISPENSAR_COD_SIT = {"02","03","04","05","06","07","08"}
-```
-
-> **Bug crítico resolvido**: `r9999_idx` era calculado antes dos `fixed.insert()` dos C190 gerados, causando deslocamento de índice. Resolvido re-buscando `|9999|` em `fixed` após todos os inserts.
-
-### Geração automática de E250 (ICMS-ST obrigações)
-
-```python
-# Para cada E210 com VL_ICMS_RECOL_ST + DEB_ESP_ST > 0 e sem E250:
-# 1. Obter UF_ST do E200 pai
-# 2. VL_OR = VL_ICMS_RECOL_ST (f[13]) + DEB_ESP_ST (f[15])
-# 3. MES_REF = mmaaaa do DT_INI do E200
-# 4. DT_VCTO = dia 10 do mês seguinte ao período
-# 5. COD_REC = detectar_cod_rec_st(uf_st) — mapeamento por UF
-
-COD_REC_ST_POR_UF = {
-    "SP": "063-2", "AM": "1304", "MT": "2810",
-    "MS": "312",   "PA": "0901",
-}
-# UFs sem mapeamento ST → E250 gerado sem COD_REC + flag para seleção manual
-```
-
-> **Regra PVA**: Soma(E250.VL_OR) deve ser igual a E210.VL_ICMS_RECOL_ST + E210.DEB_ESP_ST. Sem E250, o PVA gera erro "A soma das obrigações do ICMS ST a recolher...".
-
-> **Endpoint de edição**: `POST /editar/cod_rec_st/{id}` permite substituir COD_REC nos E250, filtrado por UF_ST.
-
-### Normalização de entrada (bug recorrente)
-
-```python
-# main.py — SEMPRE normalizar antes de processar
-conteudo = conteudo.replace("\r\n", "\n").replace("\r", "\n")
-conteudo = re.sub(r"\n{2,}", "\n", conteudo)
-```
-
-> **Causa**: arquivos gerados por versões com bug tinham `\n\n` entre cada linha. O PVA interpretava linhas vazias como registros inválidos, gerando ~1000 erros. Fix: normalizar na entrada + `.rstrip('\r\n')` em cada linha ao salvar.
-
----
-
-## 6. Detecção Automática de COD_REC (E116)
-
-### Problema
-Cada UF tem sua própria tabela SEFAZ de códigos de receita. Um código válido em MG (`1206`) é inválido em SP — o PVA rejeita com "Código inválido".
-
-### Condição de disparo
-`E116.COD_OR = "000"` (apuração normal do período) com `COD_REC` inválido para a UF.
-
-### Algoritmo
-
-```python
-def detectar_cod_rec(uf: str, tipo_item_counts: dict) -> Optional[str]:
-    # UF com código único conhecido → auto-corrigir
-    if uf in COD_REC_UNICO_POR_UF:
-        return COD_REC_UNICO_POR_UF[uf]
-    
-    # MG e RN: distinguir comércio vs indústria pelo TIPO_ITEM do 0200
-    if uf in ("MG", "RN"):
-        rev = tipo_item_counts.get("00", 0)          # mercadoria p/ revenda
-        ind = sum(v for k,v in tipo_item_counts.items()
-                  if k in ("01","02","03","04","05","06"))  # matéria-prima, etc.
-        return "1206" if rev >= ind else "1214"
-    
-    return None  # outros estados → dropdown manual com válidos da UF
-```
-
-### Mapa COD_REC por UF (COD_OR=000)
+### Detecção de COD_REC (E116) por UF
 
 ```python
 COD_REC_UNICO_POR_UF = {
@@ -253,35 +159,159 @@ COD_REC_UNICO_POR_UF = {
     "AP": "1111",  "MT": "1112",  "RO": "1112", "DF": "1314",
     "PB": "1047",
 }
-COD_REC_MG_COMERCIO  = "1206"   # TIPO_ITEM=00 maioria
-COD_REC_MG_INDUSTRIA = "1214"   # TIPO_ITEM=01-06 maioria
-# AL, PI, SC → UFs sem mapeamento definido → dropdown com válidos da UF
+# MG e RN: distinguem comércio vs indústria pelo TIPO_ITEM do 0200
+# AL, PI, SC: dropdown manual
 ```
-
-### TIPO_ITEM para distinção comércio/indústria (0200)
-
-| Código | Descrição | Tipo |
-|---|---|---|
-| `00` | Mercadoria para revenda | Comércio → 1206 |
-| `01` | Matéria-prima | Indústria → 1214 |
-| `02` | Embalagem | Indústria → 1214 |
-| `03` | Produto em elaboração | Indústria → 1214 |
-| `04` | Produto acabado | Indústria → 1214 |
-| `05` | Subproduto | Indústria → 1214 |
-| `06` | Produto intermediário | Indústria → 1214 |
-| `07` | Material de uso/consumo | Neutro |
-| `08` | Ativo imobilizado | Neutro |
 
 ---
 
-## 7. API REST (main.py)
+## 6. Engine Contribuições (`engine_contrib.py`)
+
+### Fluxo principal
+
+```python
+def processar(conteudo: str) -> Resultado:
+    # Passagem 1: coleta global (CNPJ, regime, participantes, itens, acumuladores)
+    # Fase A0: IND_REG_CUM auto-correção (0110)
+    # Fase A1: IND_ESCRI auto-correção (C010)
+    # Fase A2: Blocos ausentes — insere X001+X990 na ordem correta
+    # Fase A3: IND_MOV consistência (header vs dados)
+    # Passagem 2: validações e correções campo a campo
+    # Fase G2: Gerar C175 para NFC-e (MOD 65) + VL_MERC
+    # Fase E1: Auto-geração Bloco M (M200, M210, M400, M410, M600, M610, M800, M810)
+    # Fase E4: Recálculo contadores (9900, C990, 9999)
+    # Validações cruzadas (C1-C4, D3)
+    # Sumário
+```
+
+### Resultado retornado (mesmo formato de ambas engines)
+
+```python
+@dataclass
+class Resultado:
+    erros: list[Erro]       # Erros críticos
+    flags: list[Flag]       # Alertas para revisão manual
+    fixes: list[Fix]        # Correções aplicadas automaticamente
+    sumario: Sumario        # Métricas e nome/CNPJ/período
+    fixed_lines: list[str]  # Linhas do arquivo após correções
+```
+
+### Fases de correção detalhadas
+
+#### Fase A0 — IND_REG_CUM (registro 0110)
+Quando `COD_INC_TRIB=2` (cumulativo) e o arquivo possui registros C100, corrige `IND_REG_CUM` para `9` (detalhamento por documento), evitando que o PVA exija F500 (consolidação).
+
+#### Fase A1 — IND_ESCRI (registro C010)
+Detecta se o estabelecimento tem operações no Bloco C. Se tem, define `IND_ESCRI=2` (consolidado). Se não tem movimentação, define `IND_ESCRI=1` (escrituração detalhada padrão).
+
+#### Fase A2 — Blocos ausentes
+Insere blocos faltantes (`X001|1|` + `X990|2|`) na posição correta segundo `BLOCOS_CONTRIB_ORDERED = [0, A, C, D, F, I, M, P, 1, 9]`. Para regime cumulativo (`COD_INC_TRIB=2`), remove o Bloco I (imobilizado não cumulativo).
+
+#### Fase A3 — IND_MOV
+Corrige `IND_MOV` nos headers de bloco: se IND_MOV=0 (tem movimento) mas bloco vazio → corrige para 1. Se IND_MOV=1 (sem movimento) mas bloco tem registros → corrige para 0.
+
+#### Passagem 2 — Validações por registro
+
+| Registro | Validação/Correção |
+|---|---|
+| `0000` | COD_VER pelo período, formatos de data |
+| `0150` | Tamanho do NOME (100 chars) |
+| `0190` | Tamanho da UNID (6 chars) |
+| `C100` | Datas, COD_MOD, COD_SIT, CHV_NFE (44 dígitos), CNPJ da chave vs participante, COD_PART vs 0150, período |
+| `C170` | UNID, CFOP, CST PIS/COFINS (validade + simetria + entrada/saída), CST IPI, BC PIS = BC COFINS, alíquota vs regime, recálculo VL_PIS/VL_COFINS, COD_ITEM vs 0200, **G1: preenche CST vazio com 49 para saída** |
+| `C175` | CST PIS/COFINS, BC, alíquota vs regime, recálculo VL_PIS/VL_COFINS |
+| `A100` | Datas, COD_MOD |
+| Genérico | Campos insuficientes (pipes faltantes), tamanhos máximos |
+
+#### Fase G2 — C175 para NFC-e (MOD 65)
+Para cada C100 com MOD=65 sem C175 filho:
+1. Preenche `VL_MERC` (campo 16) com `VL_DOC` se estiver zerado
+2. Gera C175 com `CFOP=5102`, `VL_OPR=VL_DOC`, `CST_PIS=49`, `CST_COFINS=49`, alíquotas zero
+
+#### Fase E1 — Auto-geração Bloco M
+Gera registros M obrigatórios quando ausentes:
+- `M200` (PIS) + `M210` (detalhamento por CST)
+- `M400` (PIS crédito) + `M410` (detalhamento)
+- `M600` (COFINS) + `M610` (detalhamento por CST)
+- `M800` (COFINS crédito) + `M810` (detalhamento)
+
+#### Fase E4 — Contadores
+Recalcula `9900` (contagem por tipo de registro), `C990`/etc (fechamento de bloco) e `9999` (QTD_LIN total).
+
+### Validações cruzadas (Fase C/D)
+
+| Código | Validação |
+|---|---|
+| C1 | M210.VL_CONT vs soma real dos registros de origem |
+| C2 | CSTs usados no arquivo vs M-blocks existentes |
+| C3 | CST COFINS usados vs M600/M610 existentes |
+| C4 | Registro 1900 obrigatório a partir de 04/2013 |
+| D3 | Alíquotas C170 vs regime tributário (cumulativo/não-cumulativo) |
+
+### Campos-chave do regime
+
+| Campo | Registro | Significado |
+|---|---|---|
+| `COD_INC_TRIB` | 0110 campo 2 | `1`=não-cumulativo, `2`=cumulativo, `3`=ambos |
+| `IND_REG_CUM` | 0110 campo 5 | `1`=consolidado F500, `9`=detalhado C100/C170 |
+| `IND_ESCRI` | C010 campo 3 | `1`=detalhada, `2`=consolidada |
+| `TIPO_ESCRIT` | 0000 campo 3 | `0`=original, `1`=retificadora |
+
+### Alíquotas por regime
+
+```python
+# Não-cumulativo (COD_INC_TRIB=1)
+ALIQ_PIS  = 1.65%
+ALIQ_COFINS = 7.60%
+
+# Cumulativo (COD_INC_TRIB=2)
+ALIQ_PIS  = 0.65%
+ALIQ_COFINS = 3.00%
+```
+
+---
+
+## 7. Dados de Referência
+
+### dados_pva.json (ICMS/IPI)
+
+| Chave | Conteúdo |
+|---|---|
+| `leiaute` | 267 registros com campos, tamanhos máximos e índices |
+| `cfop` | 620 CFOPs válidos |
+| `cfop_sai_to_ent` / `cfop_ent_to_sai` | Conversão entrada↔saída |
+| `cst_icms` | CSTs ICMS válidos |
+| `cst_ipi` / `cst_pis` | CSTs IPI e PIS válidos |
+| `mod_doc` | Modelos de documento (55=NF-e, 65=NFC-e, etc.) |
+| `versoes` | Versões do leiaute por período |
+| `uf_cod` | Mapeamento COD_MUN IBGE → UF |
+| `f2.aj` | Códigos de ajuste E111 por UF |
+| `f2.rec` | Códigos de receita E116 por UF |
+
+### dados_pva_contrib.json (Contribuições)
+
+Gerado por `converter_pva_contrib.py` a partir do `descritor.xml` + tabelas auxiliares do PVA Contribuições.
+
+| Chave | Conteúdo |
+|---|---|
+| `leiaute` | 182 registros com campos, tamanhos máximos e índices |
+| `cfop` | CFOPs válidos para PIS/COFINS |
+| `cst_pis` / `cst_cofins` | CSTs PIS e COFINS válidos |
+| `cst_ipi` | CSTs IPI válidos |
+| `mod_doc` | Modelos de documento |
+| `versoes` | Versões do leiaute por período |
+| `uf_cod` | Mapeamento COD_MUN IBGE → UF |
+
+---
+
+## 8. API REST (main.py)
 
 ### Endpoints
 
 | Método | Rota | Descrição |
 |---|---|---|
 | `GET` | `/health` | Status do servidor |
-| `POST` | `/processar` | Upload do .txt → processa → retorna `{id, cache}` |
+| `POST` | `/processar` | Upload do .txt → detecta tipo → processa → retorna `{id, tipo, cache}` |
 | `GET` | `/resultado/{id}` | Busca resultado completo (erros, fixes, flags, sumário) |
 | `GET` | `/download/{id}` | Download do arquivo corrigido em ISO-8859-1 |
 | `GET` | `/historico?limit=50` | Lista todos os processamentos |
@@ -292,50 +322,23 @@ COD_REC_MG_INDUSTRIA = "1214"   # TIPO_ITEM=01-06 maioria
 | `POST` | `/editar/cod_rec_st/{id}` | Substitui COD_REC nos E250 (por UF_ST) |
 | `GET` | `/pendencias/{id}` | Lista pendências manuais com códigos válidos da UF |
 
-### Endpoint `/processar` — fluxo completo
+### Endpoint `/processar` — fluxo
 
 ```python
 # 1. Ler raw bytes → hash SHA-256 → verificar cache
 # 2. Decodificar ISO-8859-1 + normalizar \n
-# 3. engine.processar(conteudo)
-# 4. Salvar no SQLite + arquivo corrigido em /arquivos/{id}.txt
-# 5. Retornar {id, cache: bool}
+# 3. detectar_tipo_sped(conteudo) → "icms" ou "contrib"
+# 4. Roteamento: processar_icms(conteudo) ou processar_contrib(conteudo)
+# 5. Salvar no SQLite + arquivo corrigido em /arquivos/{id}.txt
+# 6. Retornar {id, tipo, cache}
 ```
-
-### Endpoint `/editar/chave` — comportamento
-
-```python
-# chave = "" → EXCLUIR C100 + todos filhos até próximo C100/C990/C001
-#           → _salvar_fixed() recalcula C990, 9900, 9999 automaticamente
-# chave = "44 dígitos" → inserir em f[9] do C100
-```
-
-### `_salvar_fixed` — recálculo automático de contadores
-
-```python
-def _salvar_fixed(proc_id: int, lines: list[str]):
-    clean = [l.rstrip("\r\n") for l in lines]
-    
-    # Recalcula xXX990 (C990, D990, E990...)
-    for cada reg990: qtd_real = count(linhas do bloco)
-    
-    # Recalcula 9900 (contador por tipo de registro)
-    for cada |9900|REG|N|: N = count(REG no arquivo)
-    
-    # Recalcula 9999
-    total = count(linhas não-vazias)
-    
-    write_text("\n".join(clean))
-```
-
-> **Crítico**: toda modificação manual (exclusão de C100, troca de COD_REC) deve passar por `_salvar_fixed` para manter contadores corretos.
 
 ### Schema SQLite
 
 ```sql
 CREATE TABLE processamentos (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    hash         TEXT UNIQUE,      -- SHA-256 do raw bytes (evita reprocessamento)
+    hash         TEXT UNIQUE,
     nome         TEXT,
     cnpj         TEXT,
     uf           TEXT,
@@ -350,13 +353,14 @@ CREATE TABLE processamentos (
     sumario_json TEXT,
     erros_json   TEXT,
     flags_json   TEXT,
-    fixes_json   TEXT
+    fixes_json   TEXT,
+    tipo         TEXT DEFAULT 'icms'   -- 'icms' ou 'contrib'
 )
 ```
 
 ---
 
-## 8. Frontend (Next.js)
+## 9. Frontend (Next.js)
 
 ### Proxy API
 
@@ -365,14 +369,20 @@ CREATE TABLE processamentos (
 rewrites: [{ source: '/api/:path*', destination: 'http://localhost:8000/:path*' }]
 ```
 
+### Detecção dual de tipo
+
+O frontend recebe `tipo` ("icms" ou "contrib") na resposta de `/processar` e adapta:
+- **Título do header**: "SPED EFD ICMS/IPI" ou "SPED EFD-Contribuições"
+- **Dashboard**: `DashboardICMS` (alíquotas por CFOP) ou `DashboardContrib` (métricas PIS/COFINS)
+- **Pendências**: Exibe campos específicos para cada tipo
+
 ### Tabs disponíveis
 
-| Tab | Componente/Lógica | Quando aparece |
+| Tab | Componente | Quando aparece |
 |---|---|---|
 | Erros | Cards filtráveis | Sempre que há resultado |
 | Corrigidos | Cards com orig→novo | Sempre que há resultado |
 | Flags | Cards com hint | Sempre que há resultado |
-| Diff | Mesmo que Corrigidos | Sempre que há resultado |
 | Pendências | `PendenciasManual` | Com resultado + procId |
 | Dashboard | `Dashboard` | Com resultado |
 | Histórico | `Historico` | Sempre |
@@ -391,113 +401,57 @@ colors: {
 // Fonte: IBM Plex Mono + IBM Plex Sans
 ```
 
-### Componente `PendenciasManual`
+---
 
-Gerencia dois tipos de pendência:
+## 10. Bugs Resolvidos (histórico)
 
-**1. CHV_NFE ausente (C100 NFC-e/NF-e)**
-- Input de 44 dígitos com validação em tempo real
-- Botão "Inserir chave" → `POST /editar/chave/{id}?linha=N` com `{chave: "44digits"}`
-- Botão "Excluir registro" → `POST /editar/chave/{id}?linha=N` com `{chave: ""}` (exclui C100+filhos)
-- Confirmação antes de excluir
+### ICMS/IPI
 
-**2. E116 — COD_REC + MES_REF**
-- MES_REF: corrigido automaticamente pela engine (não precisa de ação)
-- COD_REC: dropdown dinâmico carregado do backend (`validos_uf` da resposta)
-- Badge `✓ (recomendado)` quando `cod_sugerido` está pré-selecionado
-- Botão "Aplicar" → `POST /editar/cod_rec/{id}` com `{cod_rec: "..."}`
+| # | Bug | Causa | Fix |
+|---|---|---|---|
+| 1 | `\n\n` no arquivo | ERP gerava linhas duplas | Normalizar entrada com `re.sub` |
+| 2 | 9999 deslocado | `r9999_idx` antes dos inserts de C190 | Re-buscar `\|9999\|` após inserts |
+| 3 | Fórmula E110 | Campos errados no cálculo | Corrigido para `tot_cred - tot_deb` |
+| 4 | K200.DT_EST | ERP colocava total de linhas como data | Fallback para `DT_FIN` do 0000 |
+| 5 | Contadores pós-exclusão | `_salvar_fixed` não recalculava | Recalcula C990/9900/9999 |
+| 6 | COD_REC inválido | Código de outra UF | Auto-detecção por UF |
+| 7 | E250 ausente | E210 com ICMS-ST sem obrigação | Geração automática |
+
+### Contribuições
+
+| # | Bug | Causa | Fix |
+|---|---|---|---|
+| 8 | 507 erros C010/C100 | `IND_REG_CUM=1` (consolidado) com C100 presente | Corrigir `IND_REG_CUM=9` |
+| 9 | I001/I990 hierarquia | Bloco I sem dados mas header presente | Remoção condicional para cumulativo |
+| 10 | IndexError passagem 2 | Remoção de linhas alterava tamanho do array | Substituir por string vazia |
+| 11 | 381 CST_PIS vazio | C170 saída sem CST preenchido | Preencher com 49 |
+| 12 | 346 NFC-e sem C175 | MOD=65 sem detalhamento PIS/COFINS | Gerar C175 automaticamente |
+| 13 | 346 VL_MERC zerado | C100 NFC-e com VL_MERC=0 + C175 com VL_OPR>0 | Preencher VL_MERC com VL_DOC |
 
 ---
 
-## 9. Bugs Resolvidos (histórico)
+## 11. Pendências Manuais (não automatizáveis)
 
-### Bug 1 — `\n\n` no arquivo gerado
-**Causa**: ERP gerava arquivo com `\n\n` entre linhas → `split('\n')` preservava strings vazias → `"\n".join(fixed)` reconstituía o `\n\n`.  
-**Fix**: normalizar entrada com `re.sub(r'\n{2,}', '\n', conteudo)` + `.rstrip('\r\n')` ao salvar.
-
-### Bug 2 — 9999 não atualizado após inserção de C190
-**Causa**: `r9999_idx` calculado antes dos `fixed.insert()` → índice deslocado após inserções.  
-**Fix**: re-buscar `|9999|` diretamente em `fixed` após todos os inserts.
-
-### Bug 3 — Fórmula E110 incorreta
-**Causa**: usava `f[4]-f[8]-f[10]` em vez dos campos corretos do leiaute.  
-**Fix**: `tot_cred = f[6]+f[8]+f[9]+f[10]`, `tot_deb = f[2]+f[4]+f[5]`.
-
-### Bug 4 — K200.DT_EST inválida
-**Causa**: ERP colocava o total de linhas do arquivo (`4580`) no campo de data.  
-**Fix**: `fixDateFmt` tenta recuperar; se falha (valor com menos de 8 dígitos), usa `DT_FIN` do `0000` como fallback.
-
-### Bug 5 — Contadores não recalculados após exclusão manual de C100
-**Causa**: `_salvar_fixed` só atualizava `total_linhas` no banco.  
-**Fix**: `_salvar_fixed` agora recalcula C990/9900/9999 diretamente no conteúdo do arquivo antes de salvar.
-
-### Bug 6 — COD_REC inválido para a UF
-**Causa**: código MG (`1206`) sendo usado em SP, onde é inválido.  
-**Fix**: `detectar_cod_rec(uf, tipo_item_counts)` identifica automaticamente o código correto por UF.
-
-### Bug 7 — E250 ausente para E210 com ICMS-ST a recolher
-**Causa**: E210 tinha `VL_ICMS_RECOL_ST > 0` mas nenhum E250 filho era gerado. O PVA exige que `Soma(E250.VL_OR) = E210.VL_ICMS_RECOL_ST + E210.DEB_ESP_ST`.  
-**Fix**: Engine agora gera E250 automaticamente após C190, com `VL_OR = VL_ICMS_RECOL_ST + DEB_ESP_ST`, `DT_VCTO = dia 10 do mês seguinte`, `COD_REC` por UF_ST (mapeamento para SP, AM, MT, MS, PA). UFs sem mapeamento geram flag para seleção manual.
-
----
-
-## 10. Pendências Manuais (não automatizáveis)
+### ICMS/IPI
 
 | Registro | Campo | Motivo |
 |---|---|---|
 | C100 MOD=65 | CHV_NFE | Chave de acesso não está no SPED, precisa do ERP |
-| E116 | COD_REC (AL, PI, SC) | UFs sem mapeamento definido, precisa do contador |
-| E250 | COD_REC (UFs sem mapeamento ST) | E250 agora é gerado automaticamente, mas COD_REC depende de mapeamento por UF. UFs mapeadas: SP, AM, MT, MS, PA. Demais UFs precisam de seleção manual via `/editar/cod_rec_st` |
+| E116 | COD_REC (AL, PI, SC) | UFs sem mapeamento definido |
+| E250 | COD_REC (UFs sem mapeamento ST) | Depende da legislação estadual |
+
+### Contribuições
+
+| Registro | Campo | Motivo |
+|---|---|---|
+| 0150 | IE | Inscrição Estadual inválida no cadastro do participante |
+| C170 | CST PIS ≠ CST COFINS | Assimetria de CSTs em itens específicos |
+| C100 | CHV_NFE vs COD_PART | CNPJ da chave diverge do participante |
+| M205/M605 | COD_REC | Código de receita para contribuição |
 
 ---
 
-## 11. Próximas Funcionalidades Sugeridas
-
-Ordenadas por impacto fiscal (menor imposto pago):
-
-### Alta prioridade
-1. **Crédito de ICMS sobre energia elétrica** — conta de luz de indústria gera crédito via CIAP; maioria dos ERPs não escritura
-2. **Crédito de fretes de entrada** — CFOP 1351/2351 com C170 e C190 correspondentes
-3. **Bloco G (CIAP)** — crédito de ativo imobilizado em 48 avos; G110 geralmente vazio ou errado
-4. **Validação NCM + UF + CST** — detectar CST `000` em itens que deveriam ser `020` (redução de base) ou `040` (isento); tabela NCM × UF × benefício vigente
-
-### Média prioridade
-5. **Cruzamento E210 × E250** — ICMS ST pago vs aproveitado; C190 de 1401/2401 vs E250
-6. **Devoluções sem C170** — C100 com CFOP 1201/2201 sem itens correspondentes
-7. **DIFAL (E300)** — quando há CFOP 3xxx sem Bloco E300
-
-### Arquitetura
-8. **Processamento em lote** — múltiplos arquivos de uma vez (vários meses)
-9. **Multi-cliente** — separar histórico por CNPJ com login simples
-
----
-
-## 12. Comandos de Desenvolvimento
-
-```bash
-# Backend
-cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-
-# Frontend
-cd frontend
-npm install
-npm run dev
-
-# Testar engine diretamente
-python3 -c "
-import sys; sys.path.insert(0, 'backend')
-from engine import processar
-with open('arquivo.txt', encoding='iso-8859-1') as f:
-    res = processar(f.read())
-print(f'Erros: {len(res.erros)} Fixes: {len(res.fixes)} Flags: {len(res.flags)}')
-"
-```
-
----
-
-## 13. Notas de Arquitetura
+## 12. Notas de Arquitetura
 
 ### Encoding
 Todos os arquivos SPED são **ISO-8859-1** (latin-1). Usar sempre `encoding='iso-8859-1', errors='replace'` para leitura e escrita.
@@ -511,5 +465,65 @@ O PVA conta **linhas não-vazias** para o `9999`. A engine usa `sum(1 for l in f
 ### Cache por hash
 O endpoint `/processar` calcula SHA-256 do raw bytes. Se já existe no banco, retorna `{id, cache: true}` sem reprocessar. Para forçar reprocessamento, é necessário deletar o registro primeiro.
 
-### Vigência histórica de códigos
-`F2["rec"][uf]["h"]` contém códigos com data de início/fim de validade. `cod_valido(tab, cod, dt_ref)` verifica tanto `"v"` (vigentes) quanto `"h"` (históricos na data de referência).
+### Duas engines, mesmo formato
+Ambas engines (`engine.py` e `engine_contrib.py`) retornam o mesmo `Resultado` dataclass, permitindo que o `main.py` e o frontend tratem ambos os tipos de forma unificada.
+
+### Blocos obrigatórios Contribuições
+```python
+BLOCOS_CONTRIB_ORDERED = ["0", "A", "C", "D", "F", "I", "M", "P", "1", "9"]
+# Bloco I: removido para regime cumulativo (COD_INC_TRIB=2)
+# Bloco P: opcional (SCP - Sociedade em Conta de Participação)
+```
+
+---
+
+## 13. Comandos de Desenvolvimento
+
+```bash
+# Backend
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+
+# Frontend
+cd frontend
+npm install
+npm run dev
+
+# Testar engine ICMS/IPI
+python3 -c "
+import sys; sys.path.insert(0, 'backend')
+from engine import processar
+with open('arquivo.txt', encoding='iso-8859-1') as f:
+    res = processar(f.read())
+print(f'Erros: {len(res.erros)} Fixes: {len(res.fixes)} Flags: {len(res.flags)}')
+"
+
+# Testar engine Contribuições
+python3 -c "
+import sys; sys.path.insert(0, 'backend')
+from engine_contrib import processar
+with open('arquivo_contrib.txt', encoding='iso-8859-1') as f:
+    res = processar(f.read())
+print(f'Erros: {len(res.erros)} Fixes: {len(res.fixes)} Flags: {len(res.flags)}')
+"
+```
+
+---
+
+## 14. Próximas Funcionalidades Sugeridas
+
+### ICMS/IPI — Alta prioridade
+1. **Crédito de ICMS sobre energia elétrica** — CIAP
+2. **Crédito de fretes de entrada** — CFOP 1351/2351
+3. **Bloco G (CIAP)** — crédito de ativo imobilizado em 48 avos
+4. **Validação NCM + UF + CST** — detectar CST incorreto por benefício fiscal
+
+### Contribuições — Alta prioridade
+1. **Validação de IE no 0150** — auto-corrigir IEs inválidas conhecidas
+2. **Simetria CST PIS/COFINS** — auto-correção quando apenas um dos CSTs está preenchido
+3. **CNPJ CHV_NFE vs participante** — flag detalhado com sugestão de participante correto
+
+### Arquitetura
+4. **Processamento em lote** — múltiplos arquivos de uma vez
+5. **Multi-cliente** — separar histórico por CNPJ com login simples
