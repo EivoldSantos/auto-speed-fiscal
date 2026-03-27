@@ -1,0 +1,9 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body { background: #0f1117; color: #e8ecf4; font-family: 'IBM Plex Sans', sans-serif; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #161922; }
+::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 3px; }

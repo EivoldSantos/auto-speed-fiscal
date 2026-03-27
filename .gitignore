@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.env
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+
+# SQLite (gerado em runtime)
+*.db
+
+# Arquivos processados (gerados em runtime)
+backend/arquivos/*.txt
+!backend/arquivos/.gitkeep
+
+# Extração temporária do PVA
+backend/pva_contrib_extract/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
