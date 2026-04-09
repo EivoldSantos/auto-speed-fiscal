@@ -687,6 +687,27 @@ def processar(conteudo: str) -> Resultado:
                         f"BC PIS ({fmt_n(bc_pis_v)}) ≠ BC COFINS ({fmt_n(bc_cof_v)})",
                         "PVA exige BC PIS = BC COFINS")
 
+            # E3b: Regime cumulativo — CST tributável com alíquota zero e BC > 0 (PVA exige alíq. básica)
+            if cod_inc_trib == "2":
+                bc_pis_a = to_num(f[26]) if len(f) > 26 else None
+                bc_cof_a = to_num(f[32]) if len(f) > 32 else None
+                aliq_pis_z = to_num(f[27]) if len(f) > 27 else None
+                aliq_cof_z = to_num(f[33]) if len(f) > 33 else None
+                if cst_pis in CST_PIS_TRIBUTAVEL and bc_pis_a is not None and bc_pis_a > 0 and (
+                    aliq_pis_z is None or aliq_pis_z == 0
+                ):
+                    novo_ap = fmt_n(aliq_pis_regime, 4)
+                    rec_fix(i, 27, f[27] if len(f) > 27 else "", novo_ap, reg, ln,
+                        f"ALIQ_PIS preenchida com alíquota básica do regime cumulativo ({novo_ap})")
+                    f = fixed[i].split("|")
+                if cst_cofins in CST_COFINS_TRIBUTAVEL and bc_cof_a is not None and bc_cof_a > 0 and (
+                    aliq_cof_z is None or aliq_cof_z == 0
+                ):
+                    novo_ac = fmt_n(aliq_cof_regime, 4)
+                    rec_fix(i, 33, f[33] if len(f) > 33 else "", novo_ac, reg, ln,
+                        f"ALIQ_COFINS preenchida com alíquota básica do regime cumulativo ({novo_ac})")
+                    f = fixed[i].split("|")
+
             # E3: Alíquota C170 vs regime
             aliq_pis = to_num(f[27]) if len(f) > 27 else None
             aliq_cof = to_num(f[33]) if len(f) > 33 else None
@@ -767,6 +788,45 @@ def processar(conteudo: str) -> Resultado:
 
         fixed[i] = "|".join(f)
 
+    # ── FASE G1b: C100 NF-e/NFC-e entrada — VL_MERC >= soma VL_ITEM dos C170 ──
+    for idx_scan in range(len(fixed)):
+        ln_scan = fixed[idx_scan]
+        if not ln_scan.strip() or not ln_scan.startswith("|"):
+            continue
+        ps = ln_scan.split("|")
+        if len(ps) < 2 or ps[1].strip() != "C100":
+            continue
+        ind_oper = ps[2].strip() if len(ps) > 2 else ""
+        cod_mod = ps[5].strip() if len(ps) > 5 else ""
+        cod_sit = ps[6].strip() if len(ps) > 6 else ""
+        if cod_mod not in ("55", "65") or ind_oper != "0" or cod_sit == "05":
+            continue
+        vl_merc_cur = to_num(ps[16]) if len(ps) > 16 else None
+        if vl_merc_cur is None:
+            vl_merc_cur = 0.0
+        j = idx_scan + 1
+        soma_vl_item = 0.0
+        while j < len(fixed):
+            l2 = fixed[j]
+            if not l2.strip():
+                j += 1
+                continue
+            if not l2.startswith("|"):
+                j += 1
+                continue
+            p2 = l2.split("|")
+            r2 = p2[1].strip() if len(p2) > 1 else ""
+            if r2 in ("C100", "C990", "C001"):
+                break
+            if r2 == "C170" and len(p2) > 7:
+                soma_vl_item += to_num(p2[7]) or 0
+            j += 1
+        if soma_vl_item > vl_merc_cur + 0.02:
+            novo_vm = fmt_n(soma_vl_item)
+            orig_vm = ps[16].strip() if len(ps) > 16 else ""
+            rec_fix(idx_scan, 16, orig_vm, novo_vm, "C100", idx_scan + 1,
+                    f"VL_MERC ajustado à soma dos VL_ITEM dos itens ({novo_vm})")
+
     # ── FASE G2: Gerar C175 para NFC-e (MOD 65) sem C175 ─────────
     c175_inserts: list[tuple[int, str]] = []
     for idx_f, ln_f in enumerate(fixed):
@@ -801,6 +861,116 @@ def processar(conteudo: str) -> Resultado:
             f"{len(c175_inserts)} registros C175 gerados para NFC-e (MOD 65) sem detalhamento",
             "(ausente)", f"{len(c175_inserts)} C175"))
 
+    # ── FASE G1c: C100 — VL_PIS / VL_COFINS ≥ soma C170 (CST_PIS/CST_COFINS ≠ 05, 75) ──
+    _cst_skip_pis_cof = {"05", "75"}
+
+    def _norm_cst_sped(s: str) -> str:
+        t = (s or "").strip()
+        if t.isdigit():
+            return t.zfill(2)
+        return t
+
+    for idx_gc in range(len(fixed)):
+        ln_gc = fixed[idx_gc]
+        if not ln_gc.strip() or not ln_gc.startswith("|C100|"):
+            continue
+        pg = ln_gc.split("|")
+        if len(pg) < 2 or pg[1].strip() != "C100":
+            continue
+        cod_mod_gc = pg[5].strip() if len(pg) > 5 else ""
+        cod_sit_gc = pg[6].strip() if len(pg) > 6 else ""
+        if cod_mod_gc not in ("55", "65") or cod_sit_gc == "05":
+            continue
+        soma_pis_gc = 0.0
+        soma_cof_gc = 0.0
+        jgc = idx_gc + 1
+        while jgc < len(fixed):
+            lgc = fixed[jgc]
+            if not lgc.strip():
+                jgc += 1
+                continue
+            if not lgc.startswith("|"):
+                jgc += 1
+                continue
+            pgc = lgc.split("|")
+            rgc = pgc[1].strip() if len(pgc) > 1 else ""
+            if rgc in ("C100", "C990", "C001"):
+                break
+            if rgc == "C170" and len(pgc) > 30:
+                cst_pg = _norm_cst_sped(pgc[25] if len(pgc) > 25 else "")
+                cst_cg = _norm_cst_sped(pgc[31] if len(pgc) > 31 else "")
+                if cst_pg not in _cst_skip_pis_cof:
+                    vp_i = to_num(pgc[30]) if len(pgc) > 30 else None
+                    soma_pis_gc += vp_i if vp_i is not None else 0.0
+                if len(pgc) > 36 and cst_cg not in _cst_skip_pis_cof:
+                    vc_i = to_num(pgc[36])
+                    soma_cof_gc += vc_i if vc_i is not None else 0.0
+            jgc += 1
+        vl_p_gc = to_num(pg[26]) if len(pg) > 26 else None
+        vl_c_gc = to_num(pg[27]) if len(pg) > 27 else None
+        if vl_p_gc is None:
+            vl_p_gc = 0.0
+        if vl_c_gc is None:
+            vl_c_gc = 0.0
+        if soma_pis_gc > vl_p_gc + 0.02:
+            novo_p = fmt_n(soma_pis_gc)
+            orig_p = pg[26].strip() if len(pg) > 26 else ""
+            rec_fix(idx_gc, 26, orig_p, novo_p, "C100", idx_gc + 1,
+                    f"VL_PIS ajustado à soma dos itens C170 (CST≠05/75) ({novo_p})")
+        if soma_cof_gc > vl_c_gc + 0.02:
+            novo_c = fmt_n(soma_cof_gc)
+            orig_c = pg[27].strip() if len(pg) > 27 else ""
+            rec_fix(idx_gc, 27, orig_c, novo_c, "C100", idx_gc + 1,
+                    f"VL_COFINS ajustado à soma dos itens C170 (CST≠05/75) ({novo_c})")
+
+    # ── FASE M2: M205 / M605 quando M200 / M600 têm VL nos campos 8 ou 12 e faltam filhos ──
+    m200_m2_idx = next((i for i, l in enumerate(fixed) if l.startswith("|M200|")), -1)
+    m600_m2_idx = next((i for i, l in enumerate(fixed) if l.startswith("|M600|")), -1)
+    if m200_m2_idx >= 0:
+        pm2 = fixed[m200_m2_idx].split("|")
+        while len(pm2) <= 13:
+            pm2.append("")
+        v8_m = to_num(pm2[8]) or 0
+        v12_m = to_num(pm2[12]) or 0
+        v13_m = to_num(pm2[13]) or 0
+        if v8_m > 0 or v12_m > 0:
+            lim_m600 = m600_m2_idx if m600_m2_idx > m200_m2_idx else len(fixed)
+            tem_m205 = any(
+                fixed[k].strip().startswith("|M205|")
+                for k in range(m200_m2_idx + 1, lim_m600)
+            )
+            if not tem_m205:
+                vl_m205 = v13_m if v13_m > 0 else max(v8_m, v12_m)
+                if vl_m205 > 0:
+                    m205_m2_line = f"|M205|08|691201|{fmt_n(vl_m205)}|"
+                    fixed.insert(m200_m2_idx + 1, m205_m2_line)
+                    res.fixes.append(Fix("M205", m200_m2_idx + 2,
+                        f"M205 inserido (obrigatório com M200 campos 08/12 > 0), VL={fmt_n(vl_m205)}",
+                        "(ausente)", m205_m2_line))
+    m600_m2_idx = next((i for i, l in enumerate(fixed) if l.startswith("|M600|")), -1)
+    m990_m2_idx = next((i for i, l in enumerate(fixed) if l.startswith("|M990|")), -1)
+    if m600_m2_idx >= 0:
+        p6 = fixed[m600_m2_idx].split("|")
+        while len(p6) <= 13:
+            p6.append("")
+        v8_6 = to_num(p6[8]) or 0
+        v12_6 = to_num(p6[12]) or 0
+        v13_6 = to_num(p6[13]) or 0
+        if v8_6 > 0 or v12_6 > 0:
+            lim_990 = m990_m2_idx if m990_m2_idx > m600_m2_idx else len(fixed)
+            tem_m605 = any(
+                fixed[k].strip().startswith("|M605|")
+                for k in range(m600_m2_idx + 1, lim_990)
+            )
+            if not tem_m605:
+                vl_m605 = v13_6 if v13_6 > 0 else max(v8_6, v12_6)
+                if vl_m605 > 0:
+                    m605_m2_line = f"|M605|08|585601|{fmt_n(vl_m605)}|"
+                    fixed.insert(m600_m2_idx + 1, m605_m2_line)
+                    res.fixes.append(Fix("M605", m600_m2_idx + 2,
+                        f"M605 inserido (obrigatório com M600 campos 08/12 > 0), VL={fmt_n(vl_m605)}",
+                        "(ausente)", m605_m2_line))
+
     # ── FASE E1: Auto-geração Bloco M ─────────────────────────────
     # Localizar M200 e M600 no fixed atual (posições podem ter mudado)
     m200_fix_idx = next((i for i, l in enumerate(fixed) if l.startswith("|M200|")), -1)
@@ -809,7 +979,18 @@ def processar(conteudo: str) -> Resultado:
 
     m_lines_to_insert: list[tuple[str, str]] = []  # (line, desc)
 
-    if not m210_entries and acum_pis_vl > 0:
+    _lim_m600_e1 = m600_fix_idx if m600_fix_idx > m200_fix_idx else len(fixed)
+    _ja_m205 = m200_fix_idx >= 0 and any(
+        fixed[k].strip().startswith("|M205|")
+        for k in range(m200_fix_idx + 1, _lim_m600_e1)
+    )
+    _lim_m990_e1 = m990_fix_idx if m990_fix_idx > m600_fix_idx else len(fixed)
+    _ja_m605 = m600_fix_idx >= 0 and any(
+        fixed[k].strip().startswith("|M605|")
+        for k in range(m600_fix_idx + 1, _lim_m990_e1)
+    )
+
+    if not m210_entries and acum_pis_vl > 0 and not _ja_m205:
         vl_cont_pis = round(acum_pis_vl, 2)
         # M205: NUM_CAMPO=08 (campo VL_CONT_PER), COD_REC, VL_DEBITO
         m205_line = f"|M205|08|691201|{fmt_n(vl_cont_pis)}|"
@@ -836,7 +1017,7 @@ def processar(conteudo: str) -> Resultado:
                 fixed[m200_fix_idx], m200_new))
             fixed[m200_fix_idx] = m200_new
 
-    if not m610_entries and acum_cofins_vl > 0:
+    if not m610_entries and acum_cofins_vl > 0 and not _ja_m605:
         vl_cont_cofins = round(acum_cofins_vl, 2)
         m605_line = f"|M605|08|585601|{fmt_n(vl_cont_cofins)}|"
         m610_line = (f"|M610|01|{fmt_n(acum_rec_brt_cofins)}|{fmt_n(acum_cofins_bc)}"

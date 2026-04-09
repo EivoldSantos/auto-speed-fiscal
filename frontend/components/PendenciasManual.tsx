@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { KeyRound, Trash2, Save, AlertCircle, CheckCircle, ChevronDown, ArrowRightLeft, Link2 } from 'lucide-react'
 
 interface Pendencia {
-  tipo: 'chv_nfe' | 'e116' | 'e250' | 'm205_cod_rec' | 'm605_cod_rec' | 'bc_assimetria' | 'cnpj_chv_divergente'
+  tipo: 'chv_nfe' | 'e116' | 'e250' | 'm205_cod_rec' | 'm605_cod_rec' | 'bc_assimetria' | 'cnpj_chv_divergente' | 'vl_merc_itens' | 'aliq_zero_cst_trib'
   reg: string
   linha: number
   num_doc?: string
@@ -29,6 +29,10 @@ interface Pendencia {
   cnpj_participante?: string
   cod_part_atual?: string
   cod_part_correto?: string
+  vl_merc?: string
+  soma_itens?: string
+  pis_afetado?: boolean
+  cofins_afetado?: boolean
 }
 
 interface Props {
@@ -137,6 +141,8 @@ export default function PendenciasManual({ procId, tipo = 'icms', onAlterado }: 
   const contribPendencias = pendencias.filter(p => p.tipo === 'm205_cod_rec' || p.tipo === 'm605_cod_rec')
   const bcPendencias     = pendencias.filter(p => p.tipo === 'bc_assimetria')
   const cnpjPendencias   = pendencias.filter(p => p.tipo === 'cnpj_chv_divergente')
+  const vlMercPendencias = pendencias.filter(p => p.tipo === 'vl_merc_itens')
+  const aliqZeroPendencias = pendencias.filter(p => p.tipo === 'aliq_zero_cst_trib')
 
   if (pendencias.length === 0) return (
     <div className="flex flex-col items-center justify-center py-12 gap-3 text-gray-600">
@@ -217,6 +223,69 @@ export default function PendenciasManual({ procId, tipo = 'icms', onAlterado }: 
                 </div>
               )
             })}
+          </div>
+        </div>
+      )}
+
+      {/* ── Contrib: VL_MERC vs soma C170 (correção no motor) ── */}
+      {vlMercPendencias.length > 0 && (
+        <div className="bg-bg2 border border-border rounded-xl overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-bg3">
+            <CheckCircle className="w-4 h-4 text-green opacity-80" />
+            <span className="text-sm font-medium">C100 — VL_MERC inferior à soma dos itens (PVA)</span>
+            <span className="ml-auto text-xs font-mono px-2 py-0.5 rounded bg-green-900/30 text-green">
+              {vlMercPendencias.length} nota{vlMercPendencias.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+          <div className="p-4 space-y-3">
+            <p className="text-xs text-gray-400">
+              O motor ajusta o campo VL_MERC para a soma dos VL_ITEM dos C170 ao processar o arquivo (entrada NF-e/NFC-e).
+            </p>
+            {vlMercPendencias.map((p, idx) => (
+              <div key={idx} className="bg-bg3 rounded-lg px-3 py-2 space-y-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-mono text-white">NF nº {p.num_doc}</span>
+                  <span className="font-mono px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">L{p.linha}</span>
+                </div>
+                <div className="text-xs font-mono text-gray-300">
+                  VL_MERC atual: <span className="text-amber-300">{p.vl_merc}</span>
+                  {' · '}
+                  soma itens: <span className="text-green">{p.soma_itens}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Contrib: alíquota zero com CST tributável (correção no motor) ── */}
+      {aliqZeroPendencias.length > 0 && (
+        <div className="bg-bg2 border border-border rounded-xl overflow-hidden">
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-bg3">
+            <CheckCircle className="w-4 h-4 text-green opacity-80" />
+            <span className="text-sm font-medium">C170 — Alíquotas zeradas (regime cumulativo)</span>
+            <span className="ml-auto text-xs font-mono px-2 py-0.5 rounded bg-green-900/30 text-green">
+              {aliqZeroPendencias.length} item{aliqZeroPendencias.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+          <div className="p-4 space-y-3">
+            <p className="text-xs text-gray-400">
+              O motor preenche ALIQ_PIS / ALIQ_COFINS com as alíquotas básicas (0,65% / 3%) e recalcula os valores ao processar.
+            </p>
+            {aliqZeroPendencias.map((p, idx) => (
+              <div key={idx} className="bg-bg3 rounded-lg px-3 py-2 space-y-1">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="font-mono text-white">Item {p.cod_item || '?'}</span>
+                  <span className="text-gray-500">CFOP {p.cfop}</span>
+                  <span className="font-mono px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">L{p.linha}</span>
+                </div>
+                <div className="text-xs text-gray-400">
+                  CST PIS/COFINS {p.cst_pis}/{p.cst_cofins}
+                  {p.pis_afetado && ' · PIS'}
+                  {p.cofins_afetado && ' · COFINS'}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

@@ -9,7 +9,12 @@ from datetime import datetime
 from pathlib import Path
 from engine import processar as processar_icms
 from engine import Resultado
-from engine_contrib import processar as processar_contrib
+from engine_contrib import (
+    processar as processar_contrib,
+    CST_PIS_TRIBUTAVEL,
+    CST_COFINS_TRIBUTAVEL,
+    to_num,
+)
 
 app = FastAPI(title="SPED Autocorretor", version="1.0.0")
 
@@ -540,6 +545,7 @@ def _pendencias_contrib(proc_id: int) -> dict:
 
     uf_arq = ""
     cnpj0000 = ""
+    cod_inc_trib_arq = ""
     participantes: dict[str, str] = {}  # cod_part → cnpj
 
     for l in nao_vazias:
@@ -549,6 +555,8 @@ def _pendencias_contrib(proc_id: int) -> dict:
         if reg == "0000":
             uf_arq = p[10].strip() if len(p) > 10 else ""
             cnpj0000 = p[9].strip() if len(p) > 9 else ""
+        elif reg == "0110" and not cod_inc_trib_arq:
+            cod_inc_trib_arq = p[2].strip() if len(p) > 2 else ""
         elif reg == "0150" and len(p) > 5:
             cod_part = p[2].strip()
             cnpj_part = p[5].strip() if len(p) > 5 else ""
@@ -556,7 +564,9 @@ def _pendencias_contrib(proc_id: int) -> dict:
             if cod_part:
                 participantes[cod_part] = cnpj_part or cpf_part
 
-    for linha_1based, l in enumerate(nao_vazias, 1):
+    nv = nao_vazias
+    for i, l in enumerate(nv):
+        linha_1based = i + 1
         p = l.split("|")
         if len(p) < 2: continue
         reg = p[1].strip()
@@ -612,6 +622,33 @@ def _pendencias_contrib(proc_id: int) -> dict:
                         "cod_part_correto": part_correto,
                     })
 
+            ind_oper = p[2].strip() if len(p) > 2 else ""
+            if cod_mod in ("55", "65") and ind_oper == "0" and cod_sit != "05":
+                vl_merc_v = to_num(p[16]) if len(p) > 16 else None
+                if vl_merc_v is None:
+                    vl_merc_v = 0.0
+                soma_vl = 0.0
+                j = i + 1
+                while j < len(nv):
+                    p2 = nv[j].split("|")
+                    r2 = p2[1].strip() if len(p2) > 1 else ""
+                    if r2 in ("C100", "C990", "C001"):
+                        break
+                    if r2 == "C170" and len(p2) > 7:
+                        soma_vl += to_num(p2[7]) or 0
+                    j += 1
+                if soma_vl > vl_merc_v + 0.02:
+                    pendencias.append({
+                        "tipo": "vl_merc_itens",
+                        "reg": "C100",
+                        "linha": linha_1based,
+                        "num_doc": num_doc,
+                        "vl_merc": p[16].strip() if len(p) > 16 else "",
+                        "soma_itens": f"{soma_vl:.2f}".replace(".", ","),
+                        "raw": l[:120],
+                        "descricao": f"VL_MERC ({p[16].strip() if len(p) > 16 else ''}) < soma dos VL_ITEM dos itens ({f'{soma_vl:.2f}'.replace('.', ',')})",
+                    })
+
         if reg == "C170" and len(p) > 32:
             cst_pis = p[25].strip() if len(p) > 25 else ""
             cst_cofins = p[31].strip() if len(p) > 31 else ""
@@ -634,6 +671,36 @@ def _pendencias_contrib(proc_id: int) -> dict:
                     "bc_cofins": bc_cof_s,
                     "cst_pis": cst_pis,
                     "cst_cofins": cst_cofins,
+                })
+
+        if reg == "C170" and len(p) > 33 and cod_inc_trib_arq == "2":
+            cst_pis_a = p[25].strip() if len(p) > 25 else ""
+            cst_cof_a = p[31].strip() if len(p) > 31 else ""
+            bc_p_a = to_num(p[26]) if len(p) > 26 else None
+            bc_c_a = to_num(p[32]) if len(p) > 32 else None
+            aliq_p_a = to_num(p[27]) if len(p) > 27 else None
+            aliq_c_a = to_num(p[33]) if len(p) > 33 else None
+            pis_bad = cst_pis_a in CST_PIS_TRIBUTAVEL and bc_p_a is not None and bc_p_a > 0 and (
+                aliq_p_a is None or aliq_p_a == 0
+            )
+            cof_bad = cst_cof_a in CST_COFINS_TRIBUTAVEL and bc_c_a is not None and bc_c_a > 0 and (
+                aliq_c_a is None or aliq_c_a == 0
+            )
+            if pis_bad or cof_bad:
+                cod_item_a = p[3].strip() if len(p) > 3 else ""
+                cfop_a = p[11].strip() if len(p) > 11 else ""
+                pendencias.append({
+                    "tipo": "aliq_zero_cst_trib",
+                    "reg": "C170",
+                    "linha": linha_1based,
+                    "raw": l[:120],
+                    "descricao": "CST tributável com alíquota PIS/COFINS zerada (regime cumulativo exige alíquotas básicas)",
+                    "cod_item": cod_item_a,
+                    "cfop": cfop_a,
+                    "cst_pis": cst_pis_a,
+                    "cst_cofins": cst_cof_a,
+                    "pis_afetado": pis_bad,
+                    "cofins_afetado": cof_bad,
                 })
 
         if reg == "M205" and len(p) > 3:

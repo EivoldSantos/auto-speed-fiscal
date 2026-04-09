@@ -427,6 +427,10 @@ colors: {
 | 11 | 381 CST_PIS vazio | C170 saída sem CST preenchido | Preencher com 49 |
 | 12 | 346 NFC-e sem C175 | MOD=65 sem detalhamento PIS/COFINS | Gerar C175 automaticamente |
 | 13 | 346 VL_MERC zerado | C100 NFC-e com VL_MERC=0 + C175 com VL_OPR>0 | Preencher VL_MERC com VL_DOC |
+| 14 | PVA VL_MERC < soma C170 | NF-e/NFC-e **entrada** com total de itens maior que VL_MERC | Fase **G1b**: elevar `VL_MERC` à soma dos `VL_ITEM` dos C170 |
+| 15 | PVA ALIQ 0 com CST tributável | Regime cumulativo (`0110` COD_INC_TRIB=2), BC > 0, alíquotas zeradas | Fase **E3b**: preencher alíquotas básicas (0,65% / 3%) e recalcular VL_PIS/VL_COFINS |
+| 16 | PVA VL_PIS/VL_COFINS C100 < soma C170 | Totais do documento abaixo da soma dos itens (CST ≠ 05/75) | Fase **G1c**: elevar `VL_PIS`/`VL_COFINS` do C100 |
+| 17 | PVA M205/M605 ausentes | M200/M600 com campos 08 ou 12 > 0 sem registro filho | Fase **M2** + E1 não duplica se M205/M605 já existem |
 
 ---
 
@@ -448,6 +452,8 @@ colors: {
 | C170 | CST PIS ≠ CST COFINS | Assimetria de CSTs em itens específicos |
 | C100 | CHV_NFE vs COD_PART | CNPJ da chave diverge do participante |
 | M205/M605 | COD_REC | Código de receita para contribuição |
+
+Tipos informativos (corrigidos pelo motor ao **processar** o arquivo): `vl_merc_itens` e `aliq_zero_cst_trib` aparecem na aba Pendências até o usuário reprocessar e aplicar as correções.
 
 ---
 
